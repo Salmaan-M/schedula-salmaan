@@ -1,12 +1,17 @@
 # Schedula Backend
 
-Day 1 Backend Internship
-
 ## Tech Stack
+
 - NestJS
-- TypeScript
 - PostgreSQL
+- Prisma ORM
+- JWT Authentication
+- Passport
+- bcrypt
 
-## ER Diagram
+## APIs
 
-docs/ERDiagram.png
+POST /auth/signup
+POST /auth/login
+GET /doctor/profile
+GET /patient/profile
