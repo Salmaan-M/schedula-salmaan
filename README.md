@@ -8,3 +8,5 @@ Day 1 Backend Internship
 - PostgreSQL
 
 ## ER Diagram
+
+docs/ERDiagram.png
