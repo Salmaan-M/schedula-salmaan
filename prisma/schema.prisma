@@ -13,11 +13,46 @@ enum Role {
 }
 
 model User {
-  id        String   @id @default(uuid())
-  fullName  String
-  email     String   @unique
-  password  String
-  role      Role
+  id       String @id @default(uuid())
+  fullName String
+  email    String @unique
+  password String
+  role     Role
+
+  doctorProfile  DoctorProfile?
+  patientProfile PatientProfile?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model DoctorProfile {
+  id              String  @id @default(uuid())
+  fullName        String
+  specialization  String
+  experience      Int
+  qualification   String
+  consultationFee Float
+  availability    String
+  profileDetails  String?
+
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model PatientProfile {
+  id                String  @id @default(uuid())
+  fullName          String
+  age               Int
+  gender            String
+  contactDetails    String
+  healthInformation String?
+
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
