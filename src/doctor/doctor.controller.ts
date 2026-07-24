@@ -7,6 +7,7 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
+
 import { Request } from 'express';
 import { Delete } from '@nestjs/common';
 import { DoctorService } from './doctor.service';
@@ -20,6 +21,7 @@ import { CreateAvailabilityDto } from './dto/create-availability.dto';
 import { Param } from '@nestjs/common';
 import { UpdateAvailabilityDto } from './dto/update-availability.dto';
 import { CreateAvailabilityOverrideDto } from './dto/create-availability-override.dto';
+import { UpdateSchedulingDto } from './dto/update-scheduling.dto';
 
 interface AuthenticatedRequest extends Request {
   user: {
@@ -111,6 +113,39 @@ getAvailabilityByDate(
   @Query('date') date: string,
 ) {
   return this.doctorService.getAvailabilityByDate(
+    req.user.id,
+    date,
+  );
+}
+
+@Patch('scheduling')
+updateScheduling(
+  @Req() req: AuthenticatedRequest,
+  @Body() dto: UpdateSchedulingDto,
+) {
+  return this.doctorService.updateScheduling(
+    req.user.id,
+    dto,
+  );
+}
+
+@Get('availability/slots')
+generateStreamSlots(
+  @Req() req: AuthenticatedRequest,
+  @Query('date') date: string,
+) {
+  return this.doctorService.generateStreamSlots(
+    req.user.id,
+    date,
+  );
+}
+
+@Get('availability/waves')
+generateWaveAvailability(
+  @Req() req: AuthenticatedRequest,
+  @Query('date') date: string,
+) {
+  return this.doctorService.generateWaveAvailability(
     req.user.id,
     date,
   );
