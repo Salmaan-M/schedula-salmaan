@@ -56,10 +56,9 @@ model DoctorProfile {
 
   schedulingType SchedulingType @default(STREAM)
 
-  slotDuration Int? // minutes (STREAM)
 
   bufferTime Int? // minutes (STREAM)
-
+  waveDuration Int?
   waveCapacity Int? // max patients (WAVE)
 
   userId String @unique
