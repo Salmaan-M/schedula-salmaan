@@ -27,6 +27,11 @@ enum SchedulingType {
   WAVE
 }
 
+enum AppointmentStatus {
+  BOOKED
+  CANCELLED
+}
+
 model User {
   id       String @id @default(uuid())
   fullName String
@@ -137,7 +142,9 @@ model Appointment {
   endTime String?
 
   tokenNumber Int?
-
+  
+  status AppointmentStatus @default(BOOKED)
+  
   createdAt DateTime @default(now())
 
   @@index([doctorId])

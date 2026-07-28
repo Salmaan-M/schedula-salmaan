@@ -151,4 +151,9 @@ generateWaveAvailability(
   );
 }
 
+@Get('appointments')
+getAppointments(@Req() req: AuthenticatedRequest) {
+  return this.doctorService.getAppointments(req.user.id);
+}
+
 }

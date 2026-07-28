@@ -482,5 +482,33 @@ async generateWaveAvailability(userId: string, date: string) {
   };
 }
 
+async getAppointments(userId: string) {
+  const doctor = await this.prisma.doctorProfile.findUnique({
+    where: { userId },
+  });
+
+  if (!doctor) {
+    throw new NotFoundException('Doctor profile not found');
+  }
+
+  const appointments = await this.prisma.appointment.findMany({
+    where: {
+      doctorId: doctor.id,
+    },
+    include: {
+      patient: true,
+    },
+    orderBy: {
+      date: 'asc',
+    },
+  });
+
+  if (appointments.length === 0) {
+    throw new NotFoundException('No appointments found');
+  }
+
+  return appointments;
+}
+
 }
 

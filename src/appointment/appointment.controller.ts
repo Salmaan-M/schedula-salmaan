@@ -5,6 +5,8 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
+import { Get } from '@nestjs/common';
+import { Patch, Param } from '@nestjs/common';
 import { AppointmentService } from './appointment.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -36,4 +38,21 @@ export class AppointmentController {
       dto,
     );
   }
+  @Get('my')
+getMyAppointments(@Req() req: AuthenticatedRequest) {
+  return this.appointmentService.getMyAppointments(
+    req.user.id,
+  );
+}
+
+@Patch(':id/cancel')
+cancelAppointment(
+  @Req() req: AuthenticatedRequest,
+  @Param('id') id: string,
+) {
+  return this.appointmentService.cancelAppointment(
+    req.user.id,
+    id,
+  );
+}
 }
