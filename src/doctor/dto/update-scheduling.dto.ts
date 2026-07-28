@@ -12,13 +12,13 @@ export class UpdateSchedulingDto {
 
   @IsOptional()
   @IsInt()
-  @Min(1)
-  slotDuration?: number;
+  @Min(0)
+  bufferTime?: number;
 
   @IsOptional()
   @IsInt()
-  @Min(0)
-  bufferTime?: number;
+  @Min(1)
+  waveDuration?: number;
 
   @IsOptional()
   @IsInt()

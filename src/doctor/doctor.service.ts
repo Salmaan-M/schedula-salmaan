@@ -179,7 +179,36 @@ async updateAvailability(
       'Start time must be before end time',
     );
   }
+   
+  const updatedDay = dto.day ?? availability.day;
+const updatedStart = dto.startTime ?? availability.startTime;
+const updatedEnd = dto.endTime ?? availability.endTime;
 
+const existingSlots =
+  await this.prisma.recurringAvailability.findMany({
+    where: {
+      doctorId: doctor.id,
+      day: updatedDay,
+      NOT: {
+        id,
+      },
+    },
+  });
+
+for (const slot of existingSlots) {
+  const existingStart = this.timeToMinutes(slot.startTime);
+  const existingEnd = this.timeToMinutes(slot.endTime);
+
+  const overlaps =
+    this.timeToMinutes(updatedStart) < existingEnd &&
+    this.timeToMinutes(updatedEnd) > existingStart;
+
+  if (overlaps) {
+    throw new ConflictException(
+      'Availability overlaps with existing slot',
+    );
+  }
+}
   return this.prisma.recurringAvailability.update({
     where: { id },
     data: dto,
@@ -343,32 +372,33 @@ async updateScheduling(
   }
 
   if (dto.schedulingType === 'STREAM') {
-    if (!dto.slotDuration) {
-      throw new BadRequestException(
-        'Slot duration is required for STREAM scheduling',
-      );
-    }
+}
+
+if (dto.schedulingType === 'WAVE') {
+  if (!dto.waveDuration) {
+    throw new BadRequestException(
+      'Wave duration is required for WAVE scheduling',
+    );
   }
 
-  if (dto.schedulingType === 'WAVE') {
-    if (!dto.waveCapacity) {
-      throw new BadRequestException(
-        'Wave capacity is required for WAVE scheduling',
-      );
-    }
+  if (!dto.waveCapacity) {
+    throw new BadRequestException(
+      'Wave capacity is required for WAVE scheduling',
+    );
   }
+}
 
   return this.prisma.doctorProfile.update({
-    where: {
-      id: doctor.id,
-    },
-    data: {
-      schedulingType: dto.schedulingType,
-      slotDuration: dto.slotDuration ?? null,
-      bufferTime: dto.bufferTime ?? null,
-      waveCapacity: dto.waveCapacity ?? null,
-    },
-  });
+  where: {
+    id: doctor.id,
+  },
+  data: {
+    schedulingType: dto.schedulingType,
+    bufferTime: dto.bufferTime ?? null,
+    waveDuration: dto.waveDuration ?? null,
+    waveCapacity: dto.waveCapacity ?? null,
+  },
+});
 }
 
 async generateStreamSlots(userId: string, date: string) {
@@ -386,36 +416,13 @@ async generateStreamSlots(userId: string, date: string) {
     );
   }
 
-  if (!doctor.slotDuration) {
-    throw new BadRequestException('Slot duration not configured');
-  }
-
   const availabilityResponse =
     await this.getAvailabilityByDate(userId, date);
-
-  const slots: { startTime: string; endTime: string }[] = [];
-
-  for (const availability of availabilityResponse.availability) {
-    let current = this.timeToMinutes(availability.startTime);
-    const end = this.timeToMinutes(availability.endTime);
-
-    while (current + doctor.slotDuration <= end) {
-      slots.push({
-        startTime: this.minutesToTime(current),
-        endTime: this.minutesToTime(
-          current + doctor.slotDuration,
-        ),
-      });
-
-      current +=
-        doctor.slotDuration + (doctor.bufferTime ?? 0);
-    }
-  }
 
   return {
     schedulingType: 'STREAM',
     date,
-    slots,
+    availability: availabilityResponse.availability,
   };
 }
 
@@ -434,24 +441,44 @@ async generateWaveAvailability(userId: string, date: string) {
     );
   }
 
-  if (!doctor.waveCapacity) {
+  if (!doctor.waveDuration || !doctor.waveCapacity) {
     throw new BadRequestException(
-      'Wave capacity not configured',
+      'Wave scheduling is not fully configured',
     );
   }
 
   const availabilityResponse =
     await this.getAvailabilityByDate(userId, date);
 
+  const waves: {
+    startTime: string;
+    endTime: string;
+    capacity: number;
+    available: number;
+  }[] = [];
+
+  for (const availability of availabilityResponse.availability) {
+    let current = this.timeToMinutes(availability.startTime);
+    const end = this.timeToMinutes(availability.endTime);
+
+    while (current + doctor.waveDuration <= end) {
+      waves.push({
+        startTime: this.minutesToTime(current),
+        endTime: this.minutesToTime(
+          current + doctor.waveDuration,
+        ),
+        capacity: doctor.waveCapacity,
+        available: doctor.waveCapacity,
+      });
+
+      current += doctor.waveDuration;
+    }
+  }
+
   return {
     schedulingType: 'WAVE',
     date,
-    waves: availabilityResponse.availability.map((slot) => ({
-      startTime: slot.startTime,
-      endTime: slot.endTime,
-      capacity: doctor.waveCapacity,
-      available: doctor.waveCapacity,
-    })),
+    waves,
   };
 }
 
