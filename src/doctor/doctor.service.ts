@@ -10,6 +10,7 @@ import { UpdateDoctorProfileDto } from './dto/update-doctor-profile.dto';
 import { CreateAvailabilityDto } from './dto/create-availability.dto';
 import { UpdateAvailabilityDto } from './dto/update-availability.dto';
 import { CreateAvailabilityOverrideDto } from './dto/create-availability-override.dto';
+import { UpdateSchedulingDto } from './dto/update-scheduling.dto';
 
 @Injectable()
 export class DoctorService {
@@ -19,6 +20,15 @@ export class DoctorService {
     const [hours, minutes] = time.split(':').map(Number);
     return hours * 60 + minutes;
   }
+
+  private minutesToTime(minutes: number): string {
+  const hours = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+
+  return `${hours.toString().padStart(2, '0')}:${mins
+    .toString()
+    .padStart(2, '0')}`;
+}
 
   async createProfile(userId: string, dto: CreateDoctorProfileDto) {
     const existing = await this.prisma.doctorProfile.findUnique({
@@ -317,6 +327,131 @@ async getAvailabilityByDate(userId: string, date: string) {
   return {
     source: 'RECURRING',
     availability: recurring,
+  };
+}
+
+async updateScheduling(
+  userId: string,
+  dto: UpdateSchedulingDto,
+) {
+  const doctor = await this.prisma.doctorProfile.findUnique({
+    where: { userId },
+  });
+
+  if (!doctor) {
+    throw new NotFoundException('Doctor profile not found');
+  }
+
+  if (dto.schedulingType === 'STREAM') {
+    if (!dto.slotDuration) {
+      throw new BadRequestException(
+        'Slot duration is required for STREAM scheduling',
+      );
+    }
+  }
+
+  if (dto.schedulingType === 'WAVE') {
+    if (!dto.waveCapacity) {
+      throw new BadRequestException(
+        'Wave capacity is required for WAVE scheduling',
+      );
+    }
+  }
+
+  return this.prisma.doctorProfile.update({
+    where: {
+      id: doctor.id,
+    },
+    data: {
+      schedulingType: dto.schedulingType,
+      slotDuration: dto.slotDuration ?? null,
+      bufferTime: dto.bufferTime ?? null,
+      waveCapacity: dto.waveCapacity ?? null,
+    },
+  });
+}
+
+async generateStreamSlots(userId: string, date: string) {
+  const doctor = await this.prisma.doctorProfile.findUnique({
+    where: { userId },
+  });
+
+  if (!doctor) {
+    throw new NotFoundException('Doctor profile not found');
+  }
+
+  if (doctor.schedulingType !== 'STREAM') {
+    throw new BadRequestException(
+      'Doctor is not using STREAM scheduling',
+    );
+  }
+
+  if (!doctor.slotDuration) {
+    throw new BadRequestException('Slot duration not configured');
+  }
+
+  const availabilityResponse =
+    await this.getAvailabilityByDate(userId, date);
+
+  const slots: { startTime: string; endTime: string }[] = [];
+
+  for (const availability of availabilityResponse.availability) {
+    let current = this.timeToMinutes(availability.startTime);
+    const end = this.timeToMinutes(availability.endTime);
+
+    while (current + doctor.slotDuration <= end) {
+      slots.push({
+        startTime: this.minutesToTime(current),
+        endTime: this.minutesToTime(
+          current + doctor.slotDuration,
+        ),
+      });
+
+      current +=
+        doctor.slotDuration + (doctor.bufferTime ?? 0);
+    }
+  }
+
+  return {
+    schedulingType: 'STREAM',
+    date,
+    slots,
+  };
+}
+
+async generateWaveAvailability(userId: string, date: string) {
+  const doctor = await this.prisma.doctorProfile.findUnique({
+    where: { userId },
+  });
+
+  if (!doctor) {
+    throw new NotFoundException('Doctor profile not found');
+  }
+
+  if (doctor.schedulingType !== 'WAVE') {
+    throw new BadRequestException(
+      'Doctor is not using WAVE scheduling',
+    );
+  }
+
+  if (!doctor.waveCapacity) {
+    throw new BadRequestException(
+      'Wave capacity not configured',
+    );
+  }
+
+  const availabilityResponse =
+    await this.getAvailabilityByDate(userId, date);
+
+  return {
+    schedulingType: 'WAVE',
+    date,
+    waves: availabilityResponse.availability.map((slot) => ({
+      startTime: slot.startTime,
+      endTime: slot.endTime,
+      capacity: doctor.waveCapacity,
+      available: doctor.waveCapacity,
+    })),
   };
 }
 
