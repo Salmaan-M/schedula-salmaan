@@ -313,6 +313,19 @@ async getAvailabilityByDate(userId: string, date: string) {
     throw new BadRequestException('Invalid date');
   }
 
+  // Get all active appointments for the selected date
+  const bookedAppointments = await this.prisma.appointment.findMany({
+    where: {
+      doctorId: doctor.id,
+      date: selectedDate,
+      status: 'BOOKED',
+    },
+    select: {
+      startTime: true,
+      endTime: true,
+    },
+  });
+
   // Check custom override first
   const overrides = await this.prisma.customAvailability.findMany({
     where: {
@@ -325,9 +338,18 @@ async getAvailabilityByDate(userId: string, date: string) {
   });
 
   if (overrides.length > 0) {
+    const availability = overrides.map((slot) => ({
+      ...slot,
+      available: !bookedAppointments.some(
+        (appointment) =>
+          appointment.startTime === slot.startTime &&
+          appointment.endTime === slot.endTime,
+      ),
+    }));
+
     return {
       source: 'CUSTOM_OVERRIDE',
-      availability: overrides,
+      availability,
     };
   }
 
@@ -353,9 +375,18 @@ async getAvailabilityByDate(userId: string, date: string) {
     },
   });
 
+  const availability = recurring.map((slot) => ({
+    ...slot,
+    available: !bookedAppointments.some(
+      (appointment) =>
+        appointment.startTime === slot.startTime &&
+        appointment.endTime === slot.endTime,
+    ),
+  }));
+
   return {
     source: 'RECURRING',
-    availability: recurring,
+    availability,
   };
 }
 
