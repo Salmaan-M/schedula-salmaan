@@ -12,6 +12,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { BookAppointmentDto } from './dto/book-appointment.dto';
+import { RescheduleAppointmentDto } from './dto/reschedule-appointment.dto';
 
 interface AuthenticatedRequest extends Request {
   user: {
@@ -55,4 +56,18 @@ cancelAppointment(
     id,
   );
 }
+
+@Patch(':id/reschedule')
+rescheduleAppointment(
+  @Req() req: AuthenticatedRequest,
+  @Param('id') id: string,
+  @Body() dto: RescheduleAppointmentDto,
+) {
+  return this.appointmentService.rescheduleAppointment(
+    req.user.id,
+    id,
+    dto,
+  );
+}
+
 }
