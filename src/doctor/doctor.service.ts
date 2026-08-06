@@ -108,7 +108,7 @@ async createAvailability(userId: string, dto: CreateAvailabilityDto) {
 
     if (overlaps) {
       throw new ConflictException(
-        'Availability overlaps with existing slot',
+        'Availability overlaps with another availability window.',
       );
     }
   }
@@ -180,9 +180,63 @@ async updateAvailability(
     );
   }
    
-  const updatedDay = dto.day ?? availability.day;
+const updatedDay = dto.day ?? availability.day;
 const updatedStart = dto.startTime ?? availability.startTime;
 const updatedEnd = dto.endTime ?? availability.endTime;
+
+// Elastic Scheduling Validation
+const appointmentDate = new Date();
+
+const weekdayMap = [
+  'SUNDAY',
+  'MONDAY',
+  'TUESDAY',
+  'WEDNESDAY',
+  'THURSDAY',
+  'FRIDAY',
+  'SATURDAY',
+];
+
+while (
+  weekdayMap[appointmentDate.getDay()] !== updatedDay
+) {
+  appointmentDate.setDate(appointmentDate.getDate() + 1);
+}
+
+const appointments =
+  await this.prisma.appointment.findMany({
+    where: {
+      doctorId: doctor.id,
+      date: appointmentDate,
+      status: 'BOOKED',
+    },
+  });
+
+const newStart = this.timeToMinutes(updatedStart);
+const newEnd = this.timeToMinutes(updatedEnd);
+
+for (const appointment of appointments) {
+  if (!appointment.startTime || !appointment.endTime) {
+    continue;
+  }
+
+  const appointmentStart = this.timeToMinutes(
+    appointment.startTime,
+  );
+
+  const appointmentEnd = this.timeToMinutes(
+    appointment.endTime,
+  );
+
+  if (
+    appointmentStart < newStart ||
+    appointmentEnd > newEnd
+  ) {
+    throw new ConflictException(
+      'Cannot shrink availability. Existing appointments would fall outside the updated availability window.',
+    );
+  }
+}
 
 const existingSlots =
   await this.prisma.recurringAvailability.findMany({

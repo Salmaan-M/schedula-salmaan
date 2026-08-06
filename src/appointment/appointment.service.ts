@@ -234,11 +234,24 @@ async cancelAppointment(userId: string, appointmentId: string) {
     );
   }
 
-  if (appointment.date < new Date()) {
-    throw new BadRequestException(
-      'Past appointments cannot be cancelled',
-    );
-  }
+  const appointmentDateTime = new Date(appointment.date);
+
+if (appointment.startTime) {
+  const [hours, minutes] = appointment.startTime
+    .split(':')
+    .map(Number);
+
+  appointmentDateTime.setHours(hours, minutes, 0, 0);
+}
+
+const diffInMinutes =
+  (appointmentDateTime.getTime() - Date.now()) / (1000 * 60);
+
+if (diffInMinutes < 30) {
+  throw new BadRequestException(
+    'Appointments cannot be cancelled within 30 minutes of the scheduled time',
+  );
+}
 
   return this.prisma.appointment.update({
     where: { id: appointmentId },
@@ -284,10 +297,39 @@ async rescheduleAppointment(
     );
   }
 
+  const appointmentDateTime = new Date(appointment.date);
+
+if (appointment.startTime) {
+  const [hours, minutes] = appointment.startTime
+    .split(':')
+    .map(Number);
+
+  appointmentDateTime.setHours(hours, minutes, 0, 0);
+}
+
+const diffInMinutes =
+  (appointmentDateTime.getTime() - Date.now()) / (1000 * 60);
+
+if (diffInMinutes < 30) {
+  throw new BadRequestException(
+    'Appointments cannot be rescheduled within 30 minutes of the scheduled time',
+  );
+}
+
   // Get doctor before using it
   const doctor = appointment.doctor;
 
   const newDate = new Date(dto.date);
+
+  if (
+  appointment.date.toDateString() === newDate.toDateString() &&
+  appointment.startTime === dto.startTime &&
+  appointment.endTime === dto.endTime
+) {
+  throw new BadRequestException(
+    'Appointment is already scheduled for this slot',
+  );
+}
 
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -346,6 +388,7 @@ async rescheduleAppointment(
         'SUNDAY',
         'MONDAY',
         'TUESDAY',
+        'WEDNESDAY',
         'THURSDAY',
         'FRIDAY',
         'SATURDAY',
@@ -431,7 +474,7 @@ async rescheduleAppointment(
   });
 
   if (bookedCount >= (doctor.waveCapacity ?? 0)) {
-    throw new ConflictException('Wave is full');
+    throw new ConflictException('Selected wave is full. Please choose another time.');
   }
 
   return this.prisma.appointment.update({
