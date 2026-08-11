@@ -5,12 +5,16 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { SlotGeneratorService } from '../scheduling/slot-generator.service';
 import { BookAppointmentDto } from './dto/book-appointment.dto';
 import { RescheduleAppointmentDto } from './dto/reschedule-appointment.dto';
 
 @Injectable()
 export class AppointmentService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly slotGenerator: SlotGeneratorService,
+  ) {}
 
   async bookAppointment(userId: string, dto: BookAppointmentDto) {
   const patient = await this.prisma.patientProfile.findUnique({
@@ -48,49 +52,25 @@ export class AppointmentService {
       );
     }
 
-    const customAvailability =
-      await this.prisma.customAvailability.findMany({
-        where: {
-          doctorId: doctor.id,
-          date: appointmentDate,
-        },
-      });
+    const availability = await this.getAvailabilityForDate(
+      doctor.id,
+      appointmentDate,
+    );
 
-    let slotExists = false;
+    // ensure slots are generated & persisted
+    const generatedSlots = await this.slotGenerator.getGeneratedSlots(
+      doctor,
+      availability,
+      appointmentDate,
+    );
 
-    if (customAvailability.length > 0) {
-      slotExists = customAvailability.some(
-        (slot) =>
-          slot.startTime === dto.startTime &&
-          slot.endTime === dto.endTime,
-      );
-    } else {
-      const weekdays = [
-        'SUNDAY',
-        'MONDAY',
-        'TUESDAY',
-        'WEDNESDAY',
-        'THURSDAY',
-        'FRIDAY',
-        'SATURDAY',
-      ];
-
-      const recurringAvailability =
-        await this.prisma.recurringAvailability.findMany({
-          where: {
-            doctorId: doctor.id,
-            day: weekdays[appointmentDate.getDay()] as any,
-          },
-        });
-
-      slotExists = recurringAvailability.some(
-        (slot) =>
-          slot.startTime === dto.startTime &&
-          slot.endTime === dto.endTime,
-      );
-    }
-
-    if (!slotExists) {
+    if (
+      !this.slotGenerator.isSlotAvailable(
+        generatedSlots,
+        dto.startTime,
+        dto.endTime,
+      )
+    ) {
       throw new BadRequestException(
         'Selected slot is not available for this doctor',
       );
@@ -98,13 +78,13 @@ export class AppointmentService {
   }
 
   const existing = await this.prisma.appointment.findFirst({
-  where: {
-    patientId: patient.id,
-    doctorId: doctor.id,
-    date: appointmentDate,
-    status: 'BOOKED',
-  },
-});
+    where: {
+      patientId: patient.id,
+      doctorId: doctor.id,
+      date: appointmentDate,
+      status: 'BOOKED',
+    },
+  });
 
   if (existing) {
     throw new ConflictException(
@@ -113,43 +93,63 @@ export class AppointmentService {
   }
 
   if (doctor.schedulingType === 'STREAM') {
-    const slotAlreadyBooked =
-      await this.prisma.appointment.findFirst({
-        where: {
+    // Use persistent Slot for STREAM bookings
+    const normalizedDate = new Date(
+      appointmentDate.getFullYear(),
+      appointmentDate.getMonth(),
+      appointmentDate.getDate(),
+    );
+
+    const slot = await this.prisma.slot.findFirst({
+      where: {
+        doctorId: doctor.id,
+        date: normalizedDate,
+        startTime: dto.startTime,
+        endTime: dto.endTime,
+      },
+    });
+
+    if (!slot) {
+      throw new BadRequestException('Selected slot does not exist');
+    }
+
+    if (slot.status !== 'AVAILABLE') {
+      throw new ConflictException('This time slot is already booked');
+    }
+
+    const bookedCount = await this.prisma.appointment.count({
+      where: {
+        doctorId: doctor.id,
+        date: normalizedDate,
+        status: 'BOOKED',
+      },
+    });
+
+    const token = bookedCount + 1;
+
+    // Transaction: create appointment then claim slot
+    return this.prisma.$transaction(async (tx) => {
+      const appointment = await tx.appointment.create({
+        data: {
           doctorId: doctor.id,
-          date: appointmentDate,
+          patientId: patient.id,
+          date: normalizedDate,
           startTime: dto.startTime,
           endTime: dto.endTime,
-          status: 'BOOKED',
+          tokenNumber: token,
         },
       });
 
-    if (slotAlreadyBooked) {
-      throw new ConflictException(
-        'This time slot is already booked',
-      );
-    }
-    
+      const updated = await tx.slot.updateMany({
+        where: { id: slot.id, status: 'AVAILABLE', appointmentId: null },
+        data: { status: 'BOOKED', appointmentId: appointment.id },
+      });
 
-    const bookedCount = await this.prisma.appointment.count({
-  where: {
-    doctorId: doctor.id,
-    date: appointmentDate,
-    status: 'BOOKED',
-  },
-});
+      if (updated.count === 0) {
+        throw new ConflictException('Slot was just booked by someone else');
+      }
 
-const token = bookedCount + 1;
-
-    return this.prisma.appointment.create({
-      data: {
-        doctorId: doctor.id,
-        patientId: patient.id,
-        date: appointmentDate,
-        startTime: dto.startTime,
-        endTime: dto.endTime,
-        tokenNumber: token,
-      },
+      return appointment;
     });
   }
 
@@ -177,6 +177,40 @@ const token = bookedCount + 1;
     },
   });
 }
+  private async getAvailabilityForDate(
+    doctorId: string,
+    date: Date,
+  ) {
+    const customAvailability =
+      await this.prisma.customAvailability.findMany({
+        where: {
+          doctorId,
+          date,
+        },
+      });
+
+    if (customAvailability.length > 0) {
+      return customAvailability;
+    }
+
+    const weekdays = [
+      'SUNDAY',
+      'MONDAY',
+      'TUESDAY',
+      'WEDNESDAY',
+      'THURSDAY',
+      'FRIDAY',
+      'SATURDAY',
+    ];
+
+    return this.prisma.recurringAvailability.findMany({
+      where: {
+        doctorId,
+        day: weekdays[date.getDay()] as any,
+      },
+    });
+  }
+
   async getMyAppointments(userId: string) {
   const patient = await this.prisma.patientProfile.findUnique({
     where: { userId },
@@ -234,17 +268,40 @@ async cancelAppointment(userId: string, appointmentId: string) {
     );
   }
 
-  if (appointment.date < new Date()) {
-    throw new BadRequestException(
-      'Past appointments cannot be cancelled',
-    );
-  }
+  const appointmentDateTime = new Date(appointment.date);
 
-  return this.prisma.appointment.update({
-    where: { id: appointmentId },
-    data: {
-      status: 'CANCELLED',
-    },
+if (appointment.startTime) {
+  const [hours, minutes] = appointment.startTime
+    .split(':')
+    .map(Number);
+
+  appointmentDateTime.setHours(hours, minutes, 0, 0);
+}
+
+const diffInMinutes =
+  (appointmentDateTime.getTime() - Date.now()) / (1000 * 60);
+
+if (diffInMinutes < 30) {
+  throw new BadRequestException(
+    'Appointments cannot be cancelled within 30 minutes of the scheduled time',
+  );
+}
+
+  // If appointment has an associated slot, release it transactionally
+  return this.prisma.$transaction(async (tx) => {
+    const updatedAppointment = await tx.appointment.update({
+      where: { id: appointmentId },
+      data: {
+        status: 'CANCELLED',
+      },
+    });
+
+    await tx.slot.updateMany({
+      where: { appointmentId: appointmentId },
+      data: { status: 'AVAILABLE', appointmentId: null },
+    });
+
+    return updatedAppointment;
   });
 }
 
@@ -284,10 +341,39 @@ async rescheduleAppointment(
     );
   }
 
+  const appointmentDateTime = new Date(appointment.date);
+
+if (appointment.startTime) {
+  const [hours, minutes] = appointment.startTime
+    .split(':')
+    .map(Number);
+
+  appointmentDateTime.setHours(hours, minutes, 0, 0);
+}
+
+const diffInMinutes =
+  (appointmentDateTime.getTime() - Date.now()) / (1000 * 60);
+
+if (diffInMinutes < 30) {
+  throw new BadRequestException(
+    'Appointments cannot be rescheduled within 30 minutes of the scheduled time',
+  );
+}
+
   // Get doctor before using it
   const doctor = appointment.doctor;
 
   const newDate = new Date(dto.date);
+
+  if (
+  appointment.date.toDateString() === newDate.toDateString() &&
+  appointment.startTime === dto.startTime &&
+  appointment.endTime === dto.endTime
+) {
+  throw new BadRequestException(
+    'Appointment is already scheduled for this slot',
+  );
+}
 
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -325,70 +411,26 @@ async rescheduleAppointment(
       );
     }
 
-    const customAvailability =
-      await this.prisma.customAvailability.findMany({
-        where: {
-          doctorId: doctor.id,
-          date: newDate,
-        },
-      });
+    const availability = await this.getAvailabilityForDate(
+      doctor.id,
+      newDate,
+    );
 
-    let slotExists = false;
+    const generatedSlots = await this.slotGenerator.getGeneratedSlots(
+      doctor,
+      availability,
+      newDate,
+    );
 
-    if (customAvailability.length > 0) {
-      slotExists = customAvailability.some(
-        (slot) =>
-          slot.startTime === dto.startTime &&
-          slot.endTime === dto.endTime,
-      );
-    } else {
-      const weekdays = [
-        'SUNDAY',
-        'MONDAY',
-        'TUESDAY',
-        'THURSDAY',
-        'FRIDAY',
-        'SATURDAY',
-      ];
-
-      const recurringAvailability =
-        await this.prisma.recurringAvailability.findMany({
-          where: {
-            doctorId: doctor.id,
-            day: weekdays[newDate.getDay()] as any,
-          },
-        });
-
-      slotExists = recurringAvailability.some(
-        (slot) =>
-          slot.startTime === dto.startTime &&
-          slot.endTime === dto.endTime,
-      );
-    }
-
-    if (!slotExists) {
+    if (
+      !this.slotGenerator.isSlotAvailable(
+        generatedSlots,
+        dto.startTime,
+        dto.endTime,
+      )
+    ) {
       throw new BadRequestException(
         'Selected slot is not available for this doctor',
-      );
-    }
-
-    const slotAlreadyBooked =
-      await this.prisma.appointment.findFirst({
-        where: {
-          doctorId: doctor.id,
-          date: newDate,
-          startTime: dto.startTime,
-          endTime: dto.endTime,
-          status: 'BOOKED',
-          NOT: {
-            id: appointment.id,
-          },
-        },
-      });
-
-    if (slotAlreadyBooked) {
-      throw new ConflictException(
-        'This time slot is already booked',
       );
     }
 
@@ -405,16 +447,55 @@ async rescheduleAppointment(
 
     const token = bookedCount + 1;
 
-    return this.prisma.appointment.update({
+    // Find the requested new slot
+    const normalizedNewDate = new Date(
+      newDate.getFullYear(),
+      newDate.getMonth(),
+      newDate.getDate(),
+    );
+
+    const newSlot = await this.prisma.slot.findFirst({
       where: {
-        id: appointment.id,
-      },
-      data: {
-        date: newDate,
+        doctorId: doctor.id,
+        date: normalizedNewDate,
         startTime: dto.startTime,
         endTime: dto.endTime,
-        tokenNumber: token,
       },
+    });
+
+    if (!newSlot) {
+      throw new BadRequestException('Selected slot does not exist');
+    }
+
+    if (newSlot.status !== 'AVAILABLE') {
+      throw new ConflictException('Selected slot is not available');
+    }
+
+    // Transaction: claim new slot, release old slot, update appointment
+    return this.prisma.$transaction(async (tx) => {
+      const claimed = await tx.slot.updateMany({
+        where: { id: newSlot.id, status: 'AVAILABLE', appointmentId: null },
+        data: { status: 'BOOKED', appointmentId: appointment.id },
+      });
+
+      if (claimed.count === 0) {
+        throw new ConflictException('Failed to claim new slot');
+      }
+
+      await tx.slot.updateMany({
+        where: { appointmentId: appointment.id },
+        data: { status: 'AVAILABLE', appointmentId: null },
+      });
+
+      return tx.appointment.update({
+        where: { id: appointment.id },
+        data: {
+          date: normalizedNewDate,
+          startTime: dto.startTime,
+          endTime: dto.endTime,
+          tokenNumber: token,
+        },
+      });
     });
   }
 
@@ -431,7 +512,7 @@ async rescheduleAppointment(
   });
 
   if (bookedCount >= (doctor.waveCapacity ?? 0)) {
-    throw new ConflictException('Wave is full');
+    throw new ConflictException('Selected wave is full. Please choose another time.');
   }
 
   return this.prisma.appointment.update({
