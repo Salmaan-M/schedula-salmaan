@@ -60,9 +60,9 @@ model DoctorProfile {
   customAvailability    CustomAvailability[]
 
   schedulingType SchedulingType @default(STREAM)
+  slots          Slot[]
 
-
-  bufferTime Int? // minutes (STREAM)
+  bufferTime   Int? // minutes (STREAM)
   waveDuration Int?
   waveCapacity Int? // max patients (WAVE)
 
@@ -142,11 +142,43 @@ model Appointment {
   endTime String?
 
   tokenNumber Int?
-  
+
   status AppointmentStatus @default(BOOKED)
-  
+
+  slot Slot?
+
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  updatedAt DateTime @default(now()) @updatedAt
+
   @@index([doctorId])
   @@index([patientId])
+}
+
+enum SlotStatus {
+  AVAILABLE
+  BOOKED
+}
+
+model Slot {
+  id String @id @default(uuid())
+
+  doctorId String
+  doctor   DoctorProfile @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+
+  date DateTime
+
+  startTime String
+  endTime   String
+
+  status SlotStatus @default(AVAILABLE)
+
+  appointment   Appointment? @relation(fields: [appointmentId], references: [id])
+  appointmentId String?      @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([doctorId, date, startTime, endTime])
+  @@index([doctorId])
+  @@index([date])
 }
