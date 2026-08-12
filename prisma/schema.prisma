@@ -32,6 +32,12 @@ enum AppointmentStatus {
   CANCELLED
 }
 
+enum NotificationType {
+  APPOINTMENT_BOOKED
+  APPOINTMENT_CANCELLED
+  APPOINTMENT_RESCHEDULED
+}
+
 model User {
   id       String @id @default(uuid())
   fullName String
@@ -85,9 +91,10 @@ model PatientProfile {
   userId String @unique
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
-  appointments Appointment[]
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  appointments  Appointment[]
+  notifications Notification[]
 }
 
 model RecurringAvailability {
@@ -150,6 +157,8 @@ model Appointment {
   createdAt DateTime @default(now())
   updatedAt DateTime @default(now()) @updatedAt
 
+  notifications Notification[]
+
   @@index([doctorId])
   @@index([patientId])
 }
@@ -181,4 +190,25 @@ model Slot {
   @@unique([doctorId, date, startTime, endTime])
   @@index([doctorId])
   @@index([date])
+}
+
+model Notification {
+  id String @id @default(uuid())
+
+  patientId String
+  patient   PatientProfile @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  appointmentId String
+  appointment   Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+
+  type    NotificationType
+  title   String
+  message String
+  read    Boolean          @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([appointmentId, type])
+  @@index([patientId, createdAt])
 }

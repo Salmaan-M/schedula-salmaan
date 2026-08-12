@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { SlotGeneratorService } from '../scheduling/slot-generator.service';
+import { NotificationService } from '../notification/notification.service';
 import { BookAppointmentDto } from './dto/book-appointment.dto';
 import { RescheduleAppointmentDto } from './dto/reschedule-appointment.dto';
 
@@ -14,6 +15,7 @@ export class AppointmentService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly slotGenerator: SlotGeneratorService,
+    private readonly notificationService: NotificationService,
   ) {}
 
   async bookAppointment(userId: string, dto: BookAppointmentDto) {
@@ -149,6 +151,25 @@ export class AppointmentService {
         throw new ConflictException('Slot was just booked by someone else');
       }
 
+      // Create appointment notification within the same transaction
+      try {
+        const title = 'Appointment Booked';
+        const message = `Your appointment with Dr. ${doctor.fullName} has been booked successfully for ${normalizedDate.toDateString()} at ${dto.startTime}.`;
+
+        await this.notificationService.createNotification(
+          {
+            patientId: patient.id,
+            appointmentId: appointment.id,
+            type: 'APPOINTMENT_BOOKED',
+            title,
+            message,
+          },
+          tx,
+        );
+      } catch (err) {
+        throw err;
+      }
+
       return appointment;
     });
   }
@@ -168,13 +189,31 @@ export class AppointmentService {
 
   const token = bookedCount + 1;
 
-  return this.prisma.appointment.create({
-    data: {
-      doctorId: doctor.id,
-      patientId: patient.id,
-      date: appointmentDate,
-      tokenNumber: token,
-    },
+  return this.prisma.$transaction(async (tx) => {
+    const appointment = await tx.appointment.create({
+      data: {
+        doctorId: doctor.id,
+        patientId: patient.id,
+        date: appointmentDate,
+        tokenNumber: token,
+      },
+    });
+
+    const title = 'Appointment Booked';
+    const message = `Your appointment with Dr. ${doctor.fullName} has been booked successfully for ${appointmentDate.toDateString()} at ${appointment.startTime ?? ''}.`;
+
+    await this.notificationService.createNotification(
+      {
+        patientId: patient.id,
+        appointmentId: appointment.id,
+        type: 'APPOINTMENT_BOOKED',
+        title,
+        message,
+      },
+      tx,
+    );
+
+    return appointment;
   });
 }
   private async getAvailabilityForDate(
@@ -300,6 +339,21 @@ if (diffInMinutes < 30) {
       where: { appointmentId: appointmentId },
       data: { status: 'AVAILABLE', appointmentId: null },
     });
+
+    // Create cancellation notification within same transaction
+    const cancelTitle = 'Appointment Cancelled';
+    const cancelMessage = `Your appointment scheduled on ${appointmentDateTime.toDateString()} at ${appointment.startTime ?? ''} has been cancelled.`;
+
+    await this.notificationService.createNotification(
+      {
+        patientId: patient.id,
+        appointmentId: updatedAppointment.id,
+        type: 'APPOINTMENT_CANCELLED',
+        title: cancelTitle,
+        message: cancelMessage,
+      },
+      tx,
+    );
 
     return updatedAppointment;
   });
@@ -471,60 +525,81 @@ if (diffInMinutes < 30) {
       throw new ConflictException('Selected slot is not available');
     }
 
-    // Transaction: claim new slot, release old slot, update appointment
+    // Transaction: claim new slot, release old slot, update appointment, create notification
     return this.prisma.$transaction(async (tx) => {
-      const claimed = await tx.slot.updateMany({
-        where: { id: newSlot.id, status: 'AVAILABLE', appointmentId: null },
-        data: { status: 'BOOKED', appointmentId: appointment.id },
-      });
+  // ----------------------------------------------------
+  // 1. Release the old slot FIRST
+  // ----------------------------------------------------
 
-      if (claimed.count === 0) {
-        throw new ConflictException('Failed to claim new slot');
-      }
-
-      await tx.slot.updateMany({
-        where: { appointmentId: appointment.id },
-        data: { status: 'AVAILABLE', appointmentId: null },
-      });
-
-      return tx.appointment.update({
-        where: { id: appointment.id },
-        data: {
-          date: normalizedNewDate,
-          startTime: dto.startTime,
-          endTime: dto.endTime,
-          tokenNumber: token,
-        },
-      });
-    });
-  }
-
-  // WAVE scheduling
-  const bookedCount = await this.prisma.appointment.count({
+  await tx.slot.updateMany({
     where: {
-      doctorId: doctor.id,
-      date: newDate,
-      status: 'BOOKED',
-      NOT: {
-        id: appointment.id,
-      },
+      appointmentId: appointment.id,
+    },
+    data: {
+      status: 'AVAILABLE',
+      appointmentId: null,
     },
   });
 
-  if (bookedCount >= (doctor.waveCapacity ?? 0)) {
-    throw new ConflictException('Selected wave is full. Please choose another time.');
+  // ----------------------------------------------------
+  // 2. Claim the new slot
+  // ----------------------------------------------------
+
+  const claimed = await tx.slot.updateMany({
+    where: {
+      id: newSlot.id,
+      status: 'AVAILABLE',
+      appointmentId: null,
+    },
+    data: {
+      status: 'BOOKED',
+      appointmentId: appointment.id,
+    },
+  });
+
+  if (claimed.count === 0) {
+    throw new ConflictException(
+      'Selected slot became unavailable during rescheduling',
+    );
   }
 
-  return this.prisma.appointment.update({
+  // ----------------------------------------------------
+  // 3. Update appointment
+  // ----------------------------------------------------
+
+  const updated = await tx.appointment.update({
     where: {
       id: appointment.id,
     },
     data: {
-      date: newDate,
-      tokenNumber: bookedCount + 1,
-      startTime: null,
-      endTime: null,
+      date: normalizedNewDate,
+      startTime: dto.startTime,
+      endTime: dto.endTime,
+      tokenNumber: token,
     },
   });
+
+  // ----------------------------------------------------
+  // 4. Create reschedule notification
+  // ----------------------------------------------------
+
+  const title = 'Appointment Rescheduled';
+
+  const message = `Your appointment has been rescheduled to ${normalizedNewDate.toDateString()} at ${dto.startTime}.`;
+
+  await this.notificationService.createNotification(
+    {
+      patientId: patient.id,
+      appointmentId: updated.id,
+      type: 'APPOINTMENT_RESCHEDULED',
+      title,
+      message,
+    },
+    tx,
+  );
+
+  return updated;
+});
+}
 }
 }
