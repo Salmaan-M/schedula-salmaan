@@ -4,7 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 type NotificationCreateInput = {
   patientId: string;
   appointmentId: string;
-  type: 'APPOINTMENT_BOOKED' | 'APPOINTMENT_CANCELLED' | 'APPOINTMENT_RESCHEDULED';
+  type: 'APPOINTMENT_BOOKED' | 'APPOINTMENT_CANCELLED' | 'APPOINTMENT_RESCHEDULED' | 'APPOINTMENT_REMINDER';
   title: string;
   message: string;
 };
