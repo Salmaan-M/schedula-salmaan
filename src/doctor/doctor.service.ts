@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { NotificationService } from '../notification/notification.service';
 import { CreateDoctorProfileDto } from './dto/create-doctor-profile.dto';
 import { UpdateDoctorProfileDto } from './dto/update-doctor-profile.dto';
 import { CreateAvailabilityDto } from './dto/create-availability.dto';
@@ -18,6 +19,7 @@ export class DoctorService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly slotGenerator: SlotGeneratorService,
+    private readonly notificationService: NotificationService,
   ) {}
 
   private readonly weekdayMap = [
@@ -828,6 +830,13 @@ export class DoctorService {
               where: {
                 id: conflict.appointmentId,
               },
+              select: {
+                id: true,
+                patientId: true,
+                date: true,
+                startTime: true,
+                endTime: true,
+              },
             });
 
           if (!appointment) {
@@ -920,6 +929,36 @@ if (claimed.count === 0) {
                 candidate.endTime,
             },
           });
+
+          // ----------------------------------------------------
+          // Create reschedule notification for patient using
+          // the same transaction client `tx` so it is atomic.
+          // ----------------------------------------------------
+
+          try {
+            const newDateStr = `${candidate.date.getFullYear()}-${(
+              candidate.date.getMonth() + 1
+            )
+              .toString()
+              .padStart(2, '0')}-${candidate.date
+              .getDate()
+              .toString()
+              .padStart(2, '0')}`;
+
+            await this.notificationService.createNotification(
+              {
+                patientId: appointment.patientId!,
+                appointmentId: appointment.id,
+                type: 'APPOINTMENT_RESCHEDULED',
+                title: 'Appointment Rescheduled',
+                message: `Your appointment was automatically rescheduled because the doctor's availability changed. New date: ${newDateStr} at ${candidate.startTime}.`,
+              },
+              tx,
+            );
+          } catch (err) {
+            // Let transaction bubble the error so everything rolls back.
+            throw err;
+          }
         }
 
         return {
