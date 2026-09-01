@@ -1,4 +1,5 @@
 # Schedula Backend
+A appointment scheduling backend project
 
 ## Deployment
 
