@@ -1,5 +1,5 @@
 # Schedula Backend
-A appointment scheduling backend project
+A appointment scheduling backend project deployed in render
 
 ## Deployment
 
